@@ -7,15 +7,15 @@ from typing import Optional, Dict
 import os
 import sys
 
-# 翻譯設定
+# Settings for translation
 TRANSLATION_SETTINGS = {
-    "model": "llama3.2:3b",  # 使用的 LLM 模型
-    "target_language": "zh-Hant-TW",  # 目標語言
-    "domain": "APP Mesh網路 無線通訊 領域",  # 專業領域
-    "style": "容易了解",  # 翻譯風格
-    "retry_count": 3,  # 重試次數
-    "min_score": 60,  # 最低接受分數
-    "prompt_version": "zh",  # 提示詞版本 (zh 或 en)
+    "model": "gemma2:27b",  # LLM model to use
+    "target_language": "pl",  # Target language: pl,se,de,fr,es,zh-Hant-TW
+    "domain": "APP Mesh Network Wireless Communication",  # Professional domain
+    "style": "easy to understand",  # Translation style
+    "retry_count": 3,  # Number of retries
+    "min_score": 60,  # Minimum acceptable score
+    "prompt_version": "en",  # Prompt version (zh or en)
 }
 
 # 提示詞模板
@@ -28,7 +28,7 @@ PROMPTS = {
    - 基本: %@、%d、%s、%lld、%i、%f、%u、%x 
    - 數字: %1$@、%2$@、%3$@ (必須保持數字)
    - 百分比: %%、%lld%% (雙%)
-   - 變數名: ${name}
+   - 變數名: ${{varname}} 形式
 
 2. 變數完整性：
    - 所有變數【完全】照原樣複製
@@ -77,14 +77,14 @@ PROMPTS = {
     },
     
     "en": {
-        "translation": """You are a professional translation assistant. Please translate English to Traditional Chinese.
+        "translation": """You are a professional translation assistant. Please translate English to {target_language}.
 
 ⚠️ CRITICAL: Variable Format Rules (Violation results in rejection)
 1. Preserve formats exactly:
    - Basic: %@, %d, %s, %lld, %i, %f, %u, %x 
    - Numbered: %1$@, %2$@, %3$@ (must keep numbers)
    - Percentage: %%, %lld%% (double %)
-   - Variables: ${name}
+   - Variables: ${{varname}}
 
 2. Variable Integrity:
    - Copy ALL variables EXACTLY as-is
@@ -178,13 +178,13 @@ class TranslationMemory:
         return find_similar_entries(text, self.memory, self.max_examples)
 
 def log_translation(original, old_translation, new_translation, score=None):
-    """記錄翻譯結果到日誌文件"""
+    """Log translation results to log file"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_entry = f"""[{timestamp}]
-原文: {original}
-{f'原翻譯: {old_translation}' if old_translation else ''}
-新翻譯: {new_translation}
-{f'評分: {score}' if score else ''}
+Source: {original}
+{f'Previous translation: {old_translation}' if old_translation else ''}
+New translation: {new_translation}
+{f'Score: {score}' if score else ''}
 {'=' * 50}
 """
     with open('translation_log.txt', 'a', encoding='utf-8') as f:
@@ -249,8 +249,10 @@ def validate_special_chars(original: str, translation: str) -> bool:
     return True
 
 def evaluate_translation(original, translation, max_retries=TRANSLATION_SETTINGS["retry_count"]):
-    """使用選擇的提示詞版本進行評分"""
+    """Evaluate translation quality with strict scoring"""
+    # First check special characters
     if not validate_special_chars(original, translation):
+        print(f"{Colors.WARNING}>> Format validation failed{Colors.ENDC}")
         return 0
         
     prompt_template = PROMPTS[TRANSLATION_SETTINGS["prompt_version"]]["evaluation"]
@@ -258,10 +260,17 @@ def evaluate_translation(original, translation, max_retries=TRANSLATION_SETTINGS
     
     for attempt in range(max_retries):
         response = call_ollama(prompt)
-        if response and response != "翻譯服務暫時無法使用，請稍後再試" and response != "無法獲取翻譯結果":
+        if response and response != "Translation service unavailable" and response != "Failed to get translation":
             try:
                 score = ''.join(filter(str.isdigit, response))
-                return int(score) if score else 50
+                score = int(score) if score else 50
+                # Add score validation
+                if score == 100:
+                    print(f"{Colors.WARNING}>> Perfect score detected, double checking...{Colors.ENDC}")
+                    # Double check if score is 100
+                    second_score = evaluate_translation(original, translation, 1)
+                    return min(score, second_score)
+                return score
             except:
                 if attempt < max_retries - 1:
                     time.sleep(2)
@@ -300,19 +309,34 @@ def translate_with_ollama(text: str, context: TranslationContext, memory: Transl
         memory.add_translation(text, text)
         return text, True
         
-    # 使用選擇的提示詞版本
-    prompt_template = PROMPTS[TRANSLATION_SETTINGS["prompt_version"]]["translation"]
-    
-    # 構建 prompt
-    prompt = prompt_template.format(
-        memory_context=format_memory_context(text, memory),
-        translation_context=context.get_context(),
-        text=text
-    )
-    
+    # 使用選擇的提示詞版本，添加更強的指令
+    prompt = f"""INSTRUCTION: Translate this text from English to {TRANSLATION_SETTINGS["target_language"]}.
+IMPORTANT: Output ONLY the translation, no explanations or additional text.
+
+Source text: {text}
+
+RULES:
+1. Return ONLY the translated text
+2. Maintain all format variables (%@, %d, etc.) exactly as-is
+3. Keep all spaces and punctuation
+4. Do not add any explanations or notes
+5. Do not repeat the source text
+
+Translation:"""
+
     translation = call_ollama(prompt).strip()
-    if translation and translation not in ["翻譯服務暫時無法使用，請稍後再試", "無法獲取翻譯結果"]:
-        memory.add_translation(text, translation)
+    
+    # 清理回應，只保留實際翻譯內容
+    if translation:
+        # 移除可能的前綴説明
+        if ":" in translation:
+            translation = translation.split(":")[-1].strip()
+        # 移除引號如果存在
+        translation = translation.strip('"').strip("'")
+        
+        if translation not in ["翻譯服務暫時無法使用，請稍後再試", "無法獲取翻譯結果"]:
+            memory.add_translation(text, translation)
+            
     return translation, False
 
 def format_memory_context(text: str, memory: TranslationMemory) -> str:
@@ -390,74 +414,71 @@ def print_strings(file_path, context: Optional[TranslationContext] = None):
     for key, value in strings.items():
         try:
             processed += 1
-            # 簡單打印進度
-            print(f"\n處理進度: {processed}/{total}")
+            print(f"\nProcessing: {processed}/{total}")
             
             en_localization = value.get('localizations', {}).get('en', {})
-            en_text = en_localization.get('stringUnit', {}).get('value') if en_localization else None
-            source_type = "en本地化" if en_text else "字串鍵值"
+            source_text = en_localization.get('stringUnit', {}).get('value') if en_localization else None
+            source_type = "EN localization" if source_text else "String key"
             
-            if not en_text:
-                en_text = key
+            if not source_text:
+                source_text = key
             
-            zh_tw = value.get('localizations', {}).get('zh-Hant-TW', {})
-            zh_tw_value = zh_tw.get('stringUnit', {}).get('value')
+            target_translation = value.get('localizations', {}).get(TRANSLATION_SETTINGS["target_language"], {})
+            current_translation = target_translation.get('stringUnit', {}).get('value')
             
-            if zh_tw_value:
-                # 如果有現有翻譯，只打印評分
-                if source_type == "字串鍵值":
-                    score = evaluate_both_translations(key, en_text, zh_tw_value)
-                    log_translation(en_text if en_text else key, zh_tw_value, zh_tw_value, score)
-                    print(f"{Colors.BLUE}>> 評分 {key}: {score}{Colors.ENDC}")
+            if current_translation:
+                # If translation exists, evaluate it
+                if source_type == "String key":
+                    score = evaluate_both_translations(key, source_text, current_translation)
+                    log_translation(source_text if source_text else key, current_translation, current_translation, score)
+                    print(f"{Colors.BLUE}>> Score for {key}: {score}{Colors.ENDC}")
                 else:
-                    score = evaluate_translation(en_text, zh_tw_value)
-                    log_translation(en_text, zh_tw_value, zh_tw_value, score)
-                    print(f"{Colors.BLUE}>> 評分 {key}: {score}{Colors.ENDC}")
+                    score = evaluate_translation(source_text, current_translation)
+                    log_translation(source_text, current_translation, current_translation, score)
+                    print(f"{Colors.BLUE}>> Score: {score}{Colors.ENDC}")
                 
                 if score < TRANSLATION_SETTINGS["min_score"]:
-                    # 需要重新翻譯
-                    print(f"{Colors.HEADER}需要重新翻譯 [{source_type}]:{Colors.ENDC}", key)
-                    print(f"{Colors.BLUE}原文:{Colors.ENDC}", en_text)
-                    print(f"{Colors.BLUE}現有翻譯:{Colors.ENDC}", zh_tw_value)
-                    new_translation = translate_with_improve_loop(key, en_text, zh_tw_value, context, memory, source_type)
-                    value['localizations']['zh-Hant-TW'] = create_translation_unit(new_translation)
+                    print(f"{Colors.HEADER}Retranslating [{source_type}]:{Colors.ENDC}", key)
+                    print(f"{Colors.BLUE}Source:{Colors.ENDC}", source_text)
+                    print(f"{Colors.BLUE}Current translation:{Colors.ENDC}", current_translation)
+                    new_translation = translate_with_improve_loop(key, source_text, current_translation, context, memory, source_type)
+                    value['localizations'][TRANSLATION_SETTINGS["target_language"]] = create_translation_unit(new_translation)
             else:
-                # 需要新翻譯
-                print(f"{Colors.HEADER}新翻譯 [{source_type}]:{Colors.ENDC}", key)
-                print(f"{Colors.BLUE}原文:{Colors.ENDC}", en_text)
-                new_translation = translate_with_improve_loop(key, en_text, None, context, memory, source_type)
+                print(f"{Colors.HEADER}New translation [{source_type}]:{Colors.ENDC}", key)
+                print(f"{Colors.BLUE}Source:{Colors.ENDC}", source_text)
+                new_translation = translate_with_improve_loop(key, source_text, None, context, memory, source_type)
                 if 'localizations' not in value:
                     value['localizations'] = {}
-                value['localizations']['zh-Hant-TW'] = create_translation_unit(new_translation)
+                value['localizations'][TRANSLATION_SETTINGS["target_language"]] = create_translation_unit(new_translation)
             
             print("-" * 50)
             
         except Exception as e:
-            print(f"{Colors.FAIL}處理項目時發生錯誤: {str(e)}{Colors.ENDC}")
+            print(f"{Colors.FAIL}Error processing item: {str(e)}{Colors.ENDC}")
             continue
     
     # 保存翻譯結果
     new_file = save_translations(data, file_path, model=TRANSLATION_SETTINGS["model"])
-    print(f"\n翻譯結果已保存至: {new_file}")
+    print(f"\nTranslation results saved to: {new_file}")
 
-def translate_with_improve_loop(key, en_text, current_translation, context, memory, source_type):
-    """處理翻譯改進循環"""
+def translate_with_improve_loop(key, source_text, current_translation, context, memory, source_type):
+    """Handle translation improvement loop"""
     max_attempts = TRANSLATION_SETTINGS["retry_count"]
     current_attempt = 0
     best_translation = current_translation
     best_score = 0
 
     while current_attempt < max_attempts:
-        translation, is_cached = translate_with_ollama(en_text if en_text else key, context, memory)
+        translation, is_cached = translate_with_ollama(source_text if source_text else key, context, memory)
         
         if is_cached:
-            print(f"{Colors.GREEN}>> 使用記憶翻譯，無需評分{Colors.ENDC}")
+            print(f"{Colors.GREEN}>> Using cached translation{Colors.ENDC}")
             return translation
             
-        print(f"{Colors.GREEN}>> 翻譯結果:{Colors.ENDC}", translation)
+        print(f"{Colors.GREEN}>> Translation result:{Colors.ENDC}", translation)
         
-        score = evaluate_both_translations(key, en_text, translation) if source_type == "字串鍵值" else evaluate_translation(en_text, translation)
-        print(f"{Colors.BLUE}>> 自評分數 (#{current_attempt + 1}):{Colors.ENDC}", score)
+        score = evaluate_both_translations(key, source_text, translation) if source_type == "String key" else evaluate_translation(source_text, translation)
+        print(f"{Colors.BLUE}>> Quality score (#{current_attempt + 1}):{Colors.ENDC}", score)
         
         if score > best_score:
             best_translation = translation
@@ -467,12 +488,13 @@ def translate_with_improve_loop(key, en_text, current_translation, context, memo
             break
             
         current_attempt += 1
+        print(f"{Colors.WARNING}>> Retrying for better quality...{Colors.ENDC}")
         
     return best_translation
 
 if __name__ == "__main__":
     # 選擇提示詞版本
-    version = input("選擇提示詞版本 (zh/en，預設zh): ").strip().lower()
+    version = input("Select prompt version (zh/en, default: en): ").strip().lower()
     if version in ["zh", "en"]:
         TRANSLATION_SETTINGS["prompt_version"] = version
     

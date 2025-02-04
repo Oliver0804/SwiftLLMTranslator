@@ -19,9 +19,10 @@
 - Ollama (需要安裝 Gemma 2.0 模型)
 - 網路連接
 
-## 安裝說明
+## 使用說明
 
-1. 克隆代碼庫：
 ```bash
 git clone [repository-url]
-cd 翻譯
+cd SwiftLLMTranslator
+python main.py
+```

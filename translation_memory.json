@@ -1,7 +1,12 @@
 {
   "": "",
+  "\t%@": "%@",
   "  %@": "  %@",
   " %@": " %@",
+  " Whether or not use INPUT_PULLUP mode for GPIO pin. Only applicable if the board uses pull-up resistors on the pin": "Czy użyć trybu INPUT_PULLUP dla pinu GPIO. Zastosowanie tylko w przypadku, gdy płyta używa rezystorów pull-up na pinie",
+  ": %@": "%@",
+  ": %d": "%d",
+  "(Re)define PIN_GPS_EN for your board.": "(Z)definiuj PIN_GPS_EN dla swojej płyty.",
   "%@": "%@",
-  "%@%%": "%@%%"
+  "%1$@ - %2$@": "%1$@ - %2$@"
 }
