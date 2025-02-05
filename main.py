@@ -10,7 +10,7 @@ import sys
 # Settings for translation
 TRANSLATION_SETTINGS = {
     "model": "gemma2:27b",  # LLM model to use
-    "target_language": "pl",  # Target language: pl,se,de,fr,es,zh-Hant-TW
+    "target_language": "zh-Hant-TW",  # Target language: pl,se,de,fr,es,zh-Hant-TW
     "domain": "APP Mesh Network Wireless Communication",  # Professional domain
     "style": "easy to understand",  # Translation style
     "retry_count": 3,  # Number of retries
@@ -248,7 +248,7 @@ def validate_special_chars(original: str, translation: str) -> bool:
         
     return True
 
-def evaluate_translation(original, translation, max_retries=TRANSLATION_SETTINGS["retry_count"]):
+def evaluate_translation(original, translation, max_retries=TRANSLATION_SETTINGS["retry_count"], is_double_check=False):
     """Evaluate translation quality with strict scoring"""
     # First check special characters
     if not validate_special_chars(original, translation):
@@ -264,12 +264,23 @@ def evaluate_translation(original, translation, max_retries=TRANSLATION_SETTINGS
             try:
                 score = ''.join(filter(str.isdigit, response))
                 score = int(score) if score else 50
-                # Add score validation
-                if score == 100:
-                    print(f"{Colors.WARNING}>> Perfect score detected, double checking...{Colors.ENDC}")
-                    # Double check if score is 100
-                    second_score = evaluate_translation(original, translation, 1)
-                    return min(score, second_score)
+                
+                # Add score validation only if not already double checking
+                if score >= 95 and not is_double_check:
+                    print(f"{Colors.WARNING}>> High score detected ({score}), verifying...{Colors.ENDC}")
+                    # Do a second check with only one retry
+                    second_score = evaluate_translation(
+                        original, 
+                        translation, 
+                        max_retries=1, 
+                        is_double_check=True
+                    )
+                    print(f"{Colors.BLUE}>> Verification score: {second_score}{Colors.ENDC}")
+                    # Take the average of both scores
+                    final_score = (score + second_score) // 2
+                    print(f"{Colors.BLUE}>> Final score: {final_score}{Colors.ENDC}")
+                    return final_score
+                    
                 return score
             except:
                 if attempt < max_retries - 1:
@@ -394,7 +405,81 @@ def create_translation_unit(translation: str) -> dict:
         }
     }
 
+def process_json_value(value: dict, memory: TranslationMemory, context: TranslationContext) -> dict:
+    """Process JSON value recursively to translate all string values while maintaining structure"""
+    if isinstance(value, dict):
+        result = {}
+        for k, v in value.items():
+            if k == "variations":
+                # Handle variations structure
+                print(f"{Colors.BLUE}>> Processing variations structure{Colors.ENDC}")
+                result[k] = {
+                    variation_type: {
+                        form: process_json_value(form_data, memory, context)
+                        for form, form_data in variation_data.items()
+                    }
+                    for variation_type, variation_data in v.items()
+                }
+            elif isinstance(v, dict):
+                result[k] = process_json_value(v, memory, context)
+            elif k == "value" and isinstance(v, str):
+                # Only translate the "value" field
+                print(f"{Colors.BLUE}>> Source text:{Colors.ENDC} {v}")
+                translation, is_cached = translate_with_ollama(v, context, memory)
+                
+                if not is_cached:
+                    # Only evaluate if not from cache
+                    score = evaluate_translation(v, translation)
+                    print(f"{Colors.GREEN}>> Translation:{Colors.ENDC} {translation}")
+                    print(f"{Colors.BLUE}>> Quality score:{Colors.ENDC} {score}")
+                else:
+                    print(f"{Colors.GREEN}>> Using cached translation:{Colors.ENDC} {translation}")
+                    
+                result[k] = translation
+            else:
+                result[k] = v
+        return result
+    return value
+
+def translate_variations(variations: dict, memory: TranslationMemory, context: TranslationContext) -> dict:
+    """Specifically handle plural variations"""
+    result = {}
+    for variation_type, forms in variations.items():
+        if variation_type == "plural":
+            print(f"{Colors.BLUE}>> Processing plural variation{Colors.ENDC}")
+            result[variation_type] = {}
+            for form, content in forms.items():
+                if "stringUnit" in content:
+                    string_unit = content["stringUnit"]
+                    if "value" in string_unit:
+                        source_text = string_unit["value"]
+                        print(f"{Colors.BLUE}>> Source text ({form}):{Colors.ENDC} {source_text}")
+                        
+                        translation, is_cached = translate_with_ollama(source_text, context, memory)
+                        
+                        if not is_cached:
+                            score = evaluate_translation(source_text, translation)
+                            print(f"{Colors.GREEN}>> Translation ({form}):{Colors.ENDC} {translation}")
+                            print(f"{Colors.BLUE}>> Quality score ({form}):{Colors.ENDC} {score}")
+                        else:
+                            print(f"{Colors.GREEN}>> Using cached translation ({form}):{Colors.ENDC} {translation}")
+                            
+                        result[variation_type][form] = {
+                            "stringUnit": {
+                                "state": "translated",
+                                "value": translation
+                            }
+                        }
+                    else:
+                        result[variation_type][form] = content
+                else:
+                    result[variation_type][form] = content
+        else:
+            result[variation_type] = forms
+    return result
+
 def print_strings(file_path, context: Optional[TranslationContext] = None):
+    """Process localization strings and add target language if missing"""
     if context is None:
         context = TranslationContext(
             domain=TRANSLATION_SETTINGS["domain"],
@@ -402,13 +487,13 @@ def print_strings(file_path, context: Optional[TranslationContext] = None):
         )
     
     memory = TranslationMemory()
+    target_lang = TRANSLATION_SETTINGS["target_language"]
     
     with open(file_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
     strings = data.get('strings', {})
     total = len(strings)
-    start_time = time.time()
     processed = 0
     
     for key, value in strings.items():
@@ -416,40 +501,54 @@ def print_strings(file_path, context: Optional[TranslationContext] = None):
             processed += 1
             print(f"\nProcessing: {processed}/{total}")
             
-            en_localization = value.get('localizations', {}).get('en', {})
-            source_text = en_localization.get('stringUnit', {}).get('value') if en_localization else None
-            source_type = "EN localization" if source_text else "String key"
+            # Find source text to translate
+            source_text = key  # Default to key if no English text found
             
-            if not source_text:
-                source_text = key
-            
-            target_translation = value.get('localizations', {}).get(TRANSLATION_SETTINGS["target_language"], {})
-            current_translation = target_translation.get('stringUnit', {}).get('value')
-            
-            if current_translation:
-                # If translation exists, evaluate it
-                if source_type == "String key":
-                    score = evaluate_both_translations(key, source_text, current_translation)
-                    log_translation(source_text if source_text else key, current_translation, current_translation, score)
-                    print(f"{Colors.BLUE}>> Score for {key}: {score}{Colors.ENDC}")
-                else:
-                    score = evaluate_translation(source_text, current_translation)
-                    log_translation(source_text, current_translation, current_translation, score)
-                    print(f"{Colors.BLUE}>> Score: {score}{Colors.ENDC}")
+            if isinstance(value, dict) and "localizations" in value:
+                localizations = value["localizations"]
                 
-                if score < TRANSLATION_SETTINGS["min_score"]:
-                    print(f"{Colors.HEADER}Retranslating [{source_type}]:{Colors.ENDC}", key)
-                    print(f"{Colors.BLUE}Source:{Colors.ENDC}", source_text)
-                    print(f"{Colors.BLUE}Current translation:{Colors.ENDC}", current_translation)
-                    new_translation = translate_with_improve_loop(key, source_text, current_translation, context, memory, source_type)
-                    value['localizations'][TRANSLATION_SETTINGS["target_language"]] = create_translation_unit(new_translation)
-            else:
-                print(f"{Colors.HEADER}New translation [{source_type}]:{Colors.ENDC}", key)
-                print(f"{Colors.BLUE}Source:{Colors.ENDC}", source_text)
-                new_translation = translate_with_improve_loop(key, source_text, None, context, memory, source_type)
-                if 'localizations' not in value:
-                    value['localizations'] = {}
-                value['localizations'][TRANSLATION_SETTINGS["target_language"]] = create_translation_unit(new_translation)
+                # Try to get English text as source
+                if "en" in localizations and "stringUnit" in localizations["en"]:
+                    source_text = localizations["en"]["stringUnit"].get("value", key)
+                
+                # Check if target language exists
+                if target_lang not in localizations:
+                    # Create new translation
+                    print(f"{Colors.BLUE}>> Adding new translation for {key}{Colors.ENDC}")
+                    print(f"{Colors.BLUE}Source text:{Colors.ENDC} {source_text}")
+                    
+                    translation, is_cached = translate_with_ollama(source_text, context, memory)
+                    if not is_cached:
+                        score = evaluate_translation(source_text, translation)
+                        print(f"{Colors.GREEN}>> Translation:{Colors.ENDC} {translation}")
+                        print(f"{Colors.BLUE}>> Quality score:{Colors.ENDC} {score}")
+                    else:
+                        print(f"{Colors.GREEN}>> Using cached translation:{Colors.ENDC} {translation}")
+                    
+                    # Add new translation with same structure
+                    localizations[target_lang] = {
+                        "stringUnit": {
+                            "state": "translated",
+                            "value": translation
+                        }
+                    }
+                    
+                elif "variations" in localizations[target_lang]:
+                    # Handle variations structure
+                    localizations[target_lang]["variations"] = translate_variations(
+                        localizations[target_lang]["variations"],
+                        memory,
+                        context
+                    )
+                else:
+                    # Update existing translation if needed
+                    current = localizations[target_lang].get("stringUnit", {}).get("value")
+                    if current:
+                        score = evaluate_translation(source_text, current)
+                        if score < TRANSLATION_SETTINGS["min_score"]:
+                            print(f"{Colors.WARNING}>> Low score ({score}), retranslating{Colors.ENDC}")
+                            translation, _ = translate_with_ollama(source_text, context, memory)
+                            localizations[target_lang]["stringUnit"]["value"] = translation
             
             print("-" * 50)
             
@@ -457,7 +556,7 @@ def print_strings(file_path, context: Optional[TranslationContext] = None):
             print(f"{Colors.FAIL}Error processing item: {str(e)}{Colors.ENDC}")
             continue
     
-    # 保存翻譯結果
+    # Save translation results
     new_file = save_translations(data, file_path, model=TRANSLATION_SETTINGS["model"])
     print(f"\nTranslation results saved to: {new_file}")
 
