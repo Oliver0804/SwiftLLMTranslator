@@ -9,7 +9,7 @@ import sys
 
 # Settings for translation
 TRANSLATION_SETTINGS = {
-    "model": "gemma2:27b",  # LLM model to use
+    "model": "gemma2:9b",  # LLM model to use
     "target_language": "zh-Hant-TW",  # Target language: pl,se,de,fr,es,zh-Hant-TW
     "domain": "APP Mesh Network Wireless Communication",  # Professional domain
     "style": "easy to understand",  # Translation style
@@ -18,120 +18,16 @@ TRANSLATION_SETTINGS = {
     "prompt_version": "en",  # Prompt version (zh or en)
 }
 
-# 提示詞模板
-PROMPTS = {
-    "zh": {
-        "translation": """您是一個專業的翻譯助手，請將英文翻譯成繁體中文。
+# Load prompts from JSON file
+def load_prompts():
+    try:
+        with open('prompts.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading prompts: {e}")
+        sys.exit(1)
 
-⚠️ 核心規則：變數格式處理規則（違反直接取消輸出）
-1. 格式完全保留：
-   - 基本: %@、%d、%s、%lld、%i、%f、%u、%x 
-   - 數字: %1$@、%2$@、%3$@ (必須保持數字)
-   - 百分比: %%、%lld%% (雙%)
-   - 變數名: ${{varname}} 形式
-
-2. 變數完整性：
-   - 所有變數【完全】照原樣複製
-   - 空格數量和位置必須一致
-   - 標點符號保持原樣
-   - 禁止改變順序
-   - 禁止拆分或插入任何字元
-
-3. 特殊情況：
-   - 純變數文本需完全相同
-   - 連接符號(如"-")保持原樣
-   - 阿拉伯數字不轉中文數字
-
-相關記憶：
-{memory_context}
-
-{translation_context}
-
-原文：{text}
-
-請直接輸出翻譯（禁止任何說明）：""",
-
-        "evaluation": """請嚴格按照規則為以下翻譯評分(0-100)：
-原文：{original}
-翻譯：{translation}
-
-⚠️ 格式驗證規則（違反任一項直接給0分）：
-1. 變數格式必須完全一致：
-   - 基本格式：%@、%d、%s、%lld、%i、%f、%u、%x 等
-   - 帶數字格式：%1$@、%2$@、%3$@ 等
-   - 百分比格式：%lld%% (保持雙%)
-2. 變數完整性：
-   - 變數內部不得插入任何字元
-   - 變數順序不得調換
-   - 變數前後空格必須保持原樣
-3. 純變數文本：
-   - 若原文僅包含變數（如 "%@" 或 "%1$@ - %2$@"），翻譯必須完全相同
-
-評分標準（總分100分）：
-1. 專業術語翻譯正確性 (25分)
-2. 繁體中文用字正確 (25分)
-3. 語意表達清晰度 (25分)
-4. 格式符號處理正確性 (25分)
-
-請只輸出分數："""
-    },
-    
-    "en": {
-        "translation": """You are a professional translation assistant. Please translate English to {target_language}.
-
-⚠️ CRITICAL: Variable Format Rules (Violation results in rejection)
-1. Preserve formats exactly:
-   - Basic: %@, %d, %s, %lld, %i, %f, %u, %x 
-   - Numbered: %1$@, %2$@, %3$@ (must keep numbers)
-   - Percentage: %%, %lld%% (double %)
-   - Variables: ${{varname}}
-
-2. Variable Integrity:
-   - Copy ALL variables EXACTLY as-is
-   - Maintain exact spacing
-   - Keep original punctuation
-   - DO NOT change order
-   - NO splitting or inserting within variables
-
-3. Special Cases:
-   - Pure variable text must be identical
-   - Keep connectors (e.g. "-") unchanged
-   - Keep Arabic numerals, no conversion
-
-Translation Memory:
-{memory_context}
-
-{translation_context}
-
-Source: {text}
-
-Output translation only (no explanations):""",
-
-        "evaluation": """Score this translation strictly (0-100):
-Source: {original}
-Translation: {translation}
-
-⚠️ Format Rules (Any violation = 0 points):
-1. Variable formats must match exactly:
-   - Basic: %@, %d, %s, %lld, %i, %f, %u, %x etc.
-   - Numbered: %1$@, %2$@, %3$@ etc.
-   - Percentage: %lld%% (keep double %)
-2. Variable Integrity:
-   - No insertions within variables
-   - No reordering of variables
-   - Maintain exact spacing around variables
-3. Pure Variable Text:
-   - Must be identical if source is variables only (e.g. "%@" or "%1$@ - %2$@")
-
-Scoring Criteria (Total 100):
-1. Technical Term Accuracy (25)
-2. Traditional Chinese Usage (25)
-3. Clarity of Expression (25)
-4. Format Symbol Handling (25)
-
-Output score only:"""
-    }
-}
+PROMPTS = load_prompts()
 
 # 終端機色彩常數
 class Colors:
