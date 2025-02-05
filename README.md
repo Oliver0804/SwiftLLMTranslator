@@ -2,10 +2,15 @@
 
 這是一個專門用於處理iOS本地化檔案（.xcstrings）的智能翻譯工具，使用LLM（Large Language Model）進行翻譯，並具有翻譯記憶和品質控制功能。
 
+## 功能展示
+
+[![功能展示](https://img.youtube.com/vi/eYZaniR_ZIA/0.jpg)](https://www.youtube.com/watch?v=eYZaniR_ZIA)
+
+點擊上方圖
 ## 功能特點
 
 - 支援 .xcstrings 檔案的批次翻譯
-- 使用 LLM (目前支援 Gemma 2.0) 進行智能翻譯
+- 使用 LLM (推薦 Gemma 2.0:27b) 進行智能翻譯
 - 翻譯記憶功能，避免重複翻譯
 - 自動保留所有變數格式（如 %@、%d、%lld 等）
 - 翻譯品質自動評分

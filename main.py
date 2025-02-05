@@ -9,7 +9,7 @@ import sys
 
 # Settings for translation
 TRANSLATION_SETTINGS = {
-    "model": "gemma2:9b",  # LLM model to use
+    "model": "gemma2:27b",  # LLM model to use
     "target_language": "zh-Hant-TW",  # Target language: pl,se,de,fr,es,zh-Hant-TW
     "domain": "APP Mesh Network Wireless Communication",  # Professional domain
     "style": "easy to understand",  # Translation style
